@@ -1,0 +1,74 @@
+log_level: INFO
+
+storage:
+  # Where to store all the data
+  storage_path: /qdrant/storage
+
+service:
+  # Host to bind the service on
+  host: 0.0.0.0
+  # HTTP port
+  http_port: 6333
+  # gRPC port
+  grpc_port: 6334
+  # Enable CORS headers in REST API
+  enable_cors: true
+
+cluster:
+  # Use `enabled: true` to run Qdrant in distributed deployment mode
+  enabled: false
+
+# Configuration for the gRPC interface
+grpc:
+  # Max size of a single gRPC request in bytes
+  max_send_message_size: 104857600
+  max_receive_message_size: 104857600
+
+# TLS configuration. Uncomment to enable HTTPS in REST API
+# tls:
+#   # Cert file
+#   cert: ./tls/cert.pem
+#   # Key file
+#   key: ./tls/key.pem
+
+telemetry_disabled: true
+
+# Optimizer configuration
+optimizer:
+  # The minimal fraction of deleted vectors in a segment, required to perform segment optimization
+  deleted_threshold: 0.2
+  # The minimal number of vectors in a segment, required to perform segment optimization
+  vacuum_min_vector_number: 1000
+  # Target amount of segments optimizer will try to keep
+  # Real amount of segments may vary depending on multiple parameters:
+  #  - Amount of stored points
+  #  - Current write RPS
+  #
+  # It is recommended to select default number of segments as a factor of the number of search threads,
+  # so that each segment would be handled evenly by one of the threads.
+  default_segment_number: 0
+  # Do not create segments larger this size (in KB)
+  max_segment_size: 5000000
+  # Maximum number of vectors to store in-memory per segment
+  memmap_threshold: 65536
+  # Maximum number of vectors allowed for plain index, otherwise it will be converted to HNSW
+  indexing_threshold: 20000
+  # Minimum interval between forced flushes.
+  flush_interval_sec: 5
+  # Maximum available threads for optimization workers
+  max_optimization_threads: 1
+
+# WAL configuration
+wal:
+  # Size of a single WAL block file
+  wal_capacity_mb: 32
+  # Number of segments to create in advance
+  wal_segments_ahead: 0
+
+# Configuration of the recovery mode for the storage
+# Recovery mode is used to recover storage state in case of data corruption.
+# There are three recovery modes:
+#   - DoNotRecover: do not recover, just fail on corruption
+#   - TryRecover: try to recover, but may lose some data
+#   - ResumeFromSnapshot: resume from snapshot, may lose some data past the snapshot
+recovery_mode: DoNotRecover

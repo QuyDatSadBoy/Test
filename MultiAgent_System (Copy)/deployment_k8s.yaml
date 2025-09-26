@@ -1,0 +1,137 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-service-deployment
+  labels:
+    app: api-service
+spec:
+  selector:
+    matchLabels:
+      app: api-service
+  template:
+    metadata:
+      labels:
+        app: api-service
+    spec:
+      # This secret is used to pull the image from your private registry.
+      # Assumes you have configured it on the 'default' service account
+      # or you can uncomment the line below to specify it directly.
+      # imagePullSecrets:
+      #   - name: sunteco-reg-cred
+      containers:
+      - name: api-service-container
+        image: hub.sunteco.io/k8s-micace/api-service:v1
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000 # TODO: IMPORTANT - Change this to the port your application listens on
+          name: http
+        env:
+        - name: TYPE_DEPLOY
+          value: "api"
+        envFrom:
+        - configMapRef:
+            name: my-app-config # Refers to the ConfigMap you provided earlier
+        # It's a good practice to define resource requests and limits
+        resources:
+          requests:
+            cpu: "200m" # 0.1 CPU core
+            memory: "200Mi" # 128 Mebibytes
+          limits:
+            cpu: "500m" # 0.5 CPU core
+            memory: "512Mi" # 512 Mebibytes
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-service-svc
+spec:
+  selector:
+    app: api-service
+  type: ClusterIP
+  
+  ports:
+  - name: http
+    protocol: TCP
+    port: 80 # The port the Service will be available on within the cluster.
+    targetPort: 8000 
+
+---
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: my-app-config
+data:
+  # MongoDB
+  # Based on: kubectl port-forward --namespace default svc/my-mongodb 27018:27017
+  MONGO_HOST: my-mongodb.default.svc.cluster.local
+  MONGO_PORT: "27017" # This is the internal service port
+  MONGO_INITDB_ROOT_USERNAME: root
+  MONGO_INITDB_ROOT_PASSWORD: adminace123
+  MONGO_INITDB_DATABASE: my-mongodb
+  MONGO_DATABASE: my-mongodb
+
+  # RabbitMQ
+  # Based on: kubectl port-forward --namespace default svc/rabbitmq 5672:5672
+  RABBITMQ_HOST: rabbitmq.default.svc.cluster.local
+  RABBITMQ_PORT: "5672"
+  RABBITMQ_DEFAULT_USER: user
+  RABBITMQ_DEFAULT_PASS: adminace123
+  RABBITMQ_DEFAULT_VHOST: ""
+  RABBITMQ_DEFAULT_NAME: rabbitmq
+
+  # Kafka
+  # Based on: kubectl port-forward svc/kafka 9092:9092
+  KAFKA_ENABLED: "true"
+  KAFKA_HOST: kafka.default.svc.cluster.local
+  KAFKA_PORT: "9092"
+  KAFKA_TOPIC: crawlhub_raw_data
+  KAFKA_NAME: kafka
+  KAFKA_TOPIC_GOOGLE: crawl_google
+  KAFKA_GROUP_ID_GOOGLE: google_search_group
+  KAFKA_TOPIC_Youtube: crawl_Youtube
+  KAFKA_GROUP_ID_Youtube: youtube_group
+  KAFKA_TOPIC_FORUM: crawl_forum
+  KAFKA_GROUP_ID_FORUM: forum_group
+  KAFKA_TOPIC_WEBSITE: crawl_website
+  KAFKA_GROUP_ID_WEBSITE: website_group
+  KAFKA_TOPIC_YOUTUBE: crawl_youtube
+  KAFKA_GROUP_ID_YOUTUBE: youtube_group
+
+  # Zookeeper (Not in port-forward script, assuming internal cluster access)
+  ZOOKEEPER_HOST: zookeeper.default.svc.cluster.local
+  ZOOKEEPER_PORT: "2181"
+
+  # MinIO (Not in port-forward script, assuming internal cluster access)
+  MINIO_HOST: minio.default.svc.cluster.local
+  MINIO_PORT: "9000"
+  MINIO_ROOT_USER: minioadmin
+  MINIO_ROOT_PASSWORD: minioadmin123
+
+  # PostgreSQL
+  # Based on: kubectl port-forward --namespace default svc/psql-test-postgresql 5432:5432
+  DATABASE_URL: postgresql+asyncpg://postgres:adminace123@api-postgresql.default.svc.cluster.local:5432/postgres
+  POSTGRES_HOST: psql-test-postgresql.default.svc.cluster.local
+  POSTGRES_PORT: "5432"
+  POSTGRES_USER: postgres
+  POSTGRES_PASSWORD: 3UEa8tsPdk
+  POSTGRES_DB: postgres
+
+  # Python
+  PYTHONPATH: /app
+
+  # API keys, proxy, captcha, ...
+  GOOGLE_API_KEY: ""
+  Google_Search_ENGINE_ID: ""
+  YOUTUBE_API_KEY: ""
+  PROXY_ENABLED: "false"
+  PROXY_PROVIDER: ""
+  PROXY_HOST: ""
+  PROXY_PORT: ""
+  PROXY_USERNAME: ""
+  PROXY_PASSWORD: ""
+  CAPTCHA_ENABLED: "false"
+  CAPTCHA_PROVIDER: ""
+  CAPTCHA_API_KEY: ""

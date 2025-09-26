@@ -1,0 +1,301 @@
+version: "3.8"
+
+networks:
+  stack:
+    driver: bridge
+
+services:
+  # PostgreSQL - Shared database for both Langfuse and LiteLLM
+  postgres:
+    image: postgres:${POSTGRES_VERSION:-16}
+    container_name: postgres
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # Create additional databases for Langfuse and LiteLLM
+      POSTGRES_MULTIPLE_DATABASES: ${POSTGRES_MULTIPLE_DATABASES}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    networks:
+      - stack
+
+  # Redis - Shared for both Langfuse and LiteLLM
+  redis:
+    image: redis:7
+    container_name: redis
+    restart: always
+    command: >
+      --requirepass ${REDIS_PASSWORD}
+    ports:
+      - "${REDIS_PORT}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "--pass", "${REDIS_PASSWORD}", "ping"]
+      interval: 3s
+      timeout: 10s
+      retries: 10
+    networks:
+      - stack
+
+  # ClickHouse for Langfuse
+  clickhouse:
+    image: clickhouse/clickhouse-server
+    container_name: clickhouse
+    restart: always
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_logs:/var/log/clickhouse-server
+    ports:
+      - "${CLICKHOUSE_HTTP_PORT}:8123"
+      - "${CLICKHOUSE_NATIVE_PORT}:9000"
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 1s
+    networks:
+      - stack
+
+  # MinIO - Object Storage
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    restart: always
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "${MINIO_API_PORT}:9000"
+      - "${MINIO_CONSOLE_PORT}:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 1s
+      timeout: 5s
+      retries: 5
+      start_period: 1s
+    networks:
+      - stack
+
+  # Elasticsearch
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${ELASTICSEARCH_VERSION}
+    container_name: elasticsearch
+    restart: always
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=${ES_JAVA_OPTS}
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile: { soft: 65536, hard: 65536 }
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    ports:
+      - "${ELASTICSEARCH_PORT}:9200"
+      - "${ELASTICSEARCH_TRANSPORT_PORT}:9300"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=50s >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    networks:
+      - stack
+
+  # Kibana
+  kibana:
+    image: docker.elastic.co/kibana/kibana:${ELASTICSEARCH_VERSION}
+    container_name: kibana
+    restart: always
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - SERVER_PUBLICBASEURL=${KIBANA_PUBLIC_BASEURL}
+    ports:
+      - "${KIBANA_PORT}:5601"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:5601/api/status >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+    networks:
+      - stack
+
+  # Qdrant Vector Database
+  qdrant:
+    image: qdrant/qdrant:${QDRANT_VERSION}
+    container_name: qdrant
+    restart: always
+    ports:
+      - "${QDRANT_HTTP_PORT}:6333"
+      - "${QDRANT_GRPC_PORT}:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+      - ./qdrant_config.yaml:/qdrant/config/production.yaml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:6333/healthz >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    ulimits:
+      nofile: { soft: 65536, hard: 65536 }
+    networks:
+      - stack
+
+  # LiteLLM Proxy
+  litellm:
+    # image: ghcr.io/berriai/litellm:main-stable
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: litellm
+    restart: always
+    volumes:
+      - ./litellm_config.yaml:/app/config.yaml:ro
+    command:
+      - "--config=/app/config.yaml"  # khớp đường dẫn assets UI
+      # - "--port=4000"
+      # - "--ui"
+      # - "--detailed_debug"
+    ports:
+      - "${LITELLM_PORT}:4000"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${LITELLM_DB_NAME}
+      STORE_MODEL_IN_DB: "True"
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
+      LANGFUSE_HOST: http://langfuse-web:3000
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      OPENAI_API_KEY_4_1: ${OPENAI_API_KEY_4_1}
+      OPENAI_API_KEY_4_1_MINI: ${OPENAI_API_KEY_4_1_MINI}
+      OPENAI_API_KEY_4O: ${OPENAI_API_KEY_4O}
+      OPENAI_API_KEY_4O_MINI: ${OPENAI_API_KEY_4O_MINI}
+      OPENAI_API_KEY_3_5_TURBO: ${OPENAI_API_KEY_3_5_TURBO}
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 http://localhost:4000/health/liveliness || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - stack
+
+  # Langfuse Worker
+  langfuse-worker:
+    image: langfuse/langfuse-worker:${LANGFUSE_VERSION}
+    container_name: langfuse-worker
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    ports:
+      - "${LANGFUSE_WORKER_PORT}:3030"
+    environment: &langfuse-env
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${LANGFUSE_DB_NAME}
+      SALT: ${LANGFUSE_SALT}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY}
+      TELEMETRY_ENABLED: ${TELEMETRY_ENABLED}
+      LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: ${LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES}
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_CLUSTER_ENABLED: ${CLICKHOUSE_CLUSTER_ENABLED}
+      # S3 Configuration for MinIO
+      LANGFUSE_USE_AZURE_BLOB: false
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: ${LANGFUSE_S3_BUCKET}
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: true
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: ${LANGFUSE_S3_BUCKET}
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: true
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+      # Redis Configuration
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_AUTH: ${REDIS_PASSWORD}
+      REDIS_TLS_ENABLED: false
+    networks:
+      - stack
+
+  # Langfuse Web
+  langfuse-web:
+    image: langfuse/langfuse:${LANGFUSE_VERSION}
+    container_name: langfuse-web
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    ports:
+      - "${LANGFUSE_PORT}:3000"
+    environment:
+      <<: *langfuse-env
+      NEXTAUTH_URL: ${NEXTAUTH_URL}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      LANGFUSE_INIT_ORG_ID: ${LANGFUSE_INIT_ORG_ID}
+      LANGFUSE_INIT_ORG_NAME: ${LANGFUSE_INIT_ORG_NAME}
+      LANGFUSE_INIT_PROJECT_ID: ${LANGFUSE_INIT_PROJECT_ID}
+      LANGFUSE_INIT_PROJECT_NAME: ${LANGFUSE_INIT_PROJECT_NAME}
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_INIT_PROJECT_PUBLIC_KEY}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_INIT_PROJECT_SECRET_KEY}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL}
+      LANGFUSE_INIT_USER_NAME: ${LANGFUSE_INIT_USER_NAME}
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD}
+    networks:
+      - stack
+
+volumes:
+  postgres_data:
+  redis_data:
+  clickhouse_data:
+  clickhouse_logs:
+  minio_data:
+  elasticsearch_data:
+  qdrant_data:

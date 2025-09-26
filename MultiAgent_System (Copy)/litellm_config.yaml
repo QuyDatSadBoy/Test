@@ -1,0 +1,83 @@
+model_list:
+  - model_name: gpt-4.1-mlops5
+    litellm_params:
+      model: openai/gpt-4.1
+      api_key: os.environ/OPENAI_API_KEY_4_1
+      rpm: 6
+      tags: ["paid"]
+      max_budget: 0.1
+      budget_duration: 1d
+      weight: 1
+
+  - model_name: gpt-4.1-mlops5
+    litellm_params:
+      model: openai/gpt-4.1-mini
+      api_key: os.environ/OPENAI_API_KEY_4_1_MINI
+      tags: ["free", "default"]
+      weight: 2
+
+  - model_name: gpt-4o-mlops5
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY_4O
+      rpm: 6
+      tags: ["paid"]
+      max_budget: 0.1
+      budget_duration: 1d
+      weight: 1
+
+  - model_name: gpt-4o-mlops5
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY_4O_MINI
+      rpm: 6
+      tags: ["free", "default"]
+      weight: 2
+
+  - model_name: gpt-3.5-mlops5
+    litellm_params:
+      model: openai/gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY_3_5_TURBO
+      tags: ["free", "default"]
+      weight: 2
+
+router_settings:
+  fallbacks: [{"gpt-4.1-mlops5": ["gpt-3.5-mlops5"]}]
+  enable_tag_filtering: true
+  
+  provider_budget_config:
+    openai:
+      budget_limit: 1
+      time_period: 1d
+  
+  redis_host: os.environ/REDIS_HOST
+  redis_port: os.environ/REDIS_PORT
+  redis_password: os.environ/REDIS_PASSWORD
+  
+  allowed_fails: 3
+  cooldown_time: 30
+  
+  retry_policy:
+    BadRequestErrorRetries: 3
+    ContentPolicyViolationErrorRetries: 4
+  
+  allowed_fails_policy:
+    ContentPolicyViolationErrorAllowedFails: 1000
+    RateLimitErrorAllowedFails: 100
+  
+  litellm_settings:
+    drop_params: true
+    cache: true
+    cache_params:
+      type: redis
+    success_callback: ["langfuse"]
+    timeout: 30
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  store_model_in_db: true
+  store_prompts_in_spend_logs: true
+  # ui: true
+  # ui_username: admin
+  # ui_password: os.environ/LITELLM_UI_PASSWORD
+  # allowed_ips: ["*"]
